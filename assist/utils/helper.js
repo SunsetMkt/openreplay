@@ -64,38 +64,43 @@ const extractSessionIdFromRequest = function (req) {
 }
 
 const isValidSession = function (sessionInfo, filters) {
-    let foundAll = true;
-    for (const [key, body] of Object.entries(filters)) {
+    const result = {matched: false, filters: {}};
+    for (const [filterName, body] of Object.entries(filters)) { // range by filter names (key)
+        if (body.values === undefined || body.values === null) {
+            return result;
+        }
         let found = false;
-        if (body.values !== undefined && body.values !== null) {
-            for (const [skey, svalue] of Object.entries(sessionInfo)) {
-                if (svalue !== undefined && svalue !== null) {
-                    if (typeof (svalue) === "object") {
-                        if (isValidSession(svalue, {[key]: body})) {
-                            found = true;
-                            break;
-                        }
-                    } else if (skey.toLowerCase() === key.toLowerCase()) {
-                        for (let v of body["values"]) {
-                            if (body.operator === "is" && v && String(svalue).toLowerCase() === String(v).toLowerCase()
-                                || body.operator !== "is" && String(svalue).toLowerCase().indexOf(String(v).toLowerCase()) >= 0) {
-                                found = true;
-                                break;
-                            }
-                        }
-                        if (found) {
-                            break;
-                        }
+        for (const [sessKey, sessValue] of Object.entries(sessionInfo)) {
+            if (sessValue === undefined || sessValue === null) {
+                continue;
+            }
+            if (typeof (sessValue) === "object") {
+                const partRes = isValidSession(sessValue, {[filterName]: body})
+                if (partRes.matched) {
+                    found = true;
+                    Object.assign(result.filters, partRes.filters);
+                    break;
+                }
+            } else if (sessKey.toLowerCase() === filterName.toLowerCase()) {
+                for (let v of body.values) {
+                    if (body.operator === "is" && v && String(sessValue).toLowerCase() === String(v).toLowerCase()
+                        || body.operator !== "is" && String(sessValue).toLowerCase().indexOf(String(v).toLowerCase()) >= 0) {
+                        found = true;
+                        result.filters[filterName] = v;
+                        break;
                     }
+                }
+                if (found) {
+                    break;
                 }
             }
         }
-        foundAll = foundAll && found;
         if (!found) {
-            break;
+            return result;
         }
     }
-    return foundAll;
+    result.matched = true;
+    return result;
 }
 
 const getValidAttributes = function (sessionInfo, query) {
@@ -209,7 +214,7 @@ const getValue = function (obj, key) {
     return undefined;
 }
 
-const sortPaginate = function (list, filters) {
+const sortPaginate = function (list, filters, counter) {
     if (typeof (list) === "object" && !Array.isArray(list)) {
         for (const [key, value] of Object.entries(list)) {
             list[key] = sortPaginate(value, filters);
@@ -239,7 +244,7 @@ const sortPaginate = function (list, filters) {
         list = list.slice((filters.pagination.page - 1) * filters.pagination.limit,
             filters.pagination.page * filters.pagination.limit);
     }
-    return {"total": total, "sessions": list};
+    return {"total": total, "sessions": list, "counter": counter};
 }
 
 const uniqueAutocomplete = function (list) {

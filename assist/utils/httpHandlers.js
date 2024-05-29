@@ -53,13 +53,14 @@ const getParticularSession = async function (roomId, filters) {
     if (!hasFilters(filters)) {
         return sessInfo;
     }
-    if (isValidSession(sessInfo, filters.filter)) {
+    const result = isValidSession(sessInfo, filters.filter)
+    if (result.matched) {
         return sessInfo;
     }
     return null;
 }
 
-const getAllSessions = async  function (projectKey, filters, onlineOnly= false) {
+const getAllSessions = async  function (projectKey, filters, counters, onlineOnly= false) {
     const sessions = [];
     const connected_sockets = await fetchSockets();
     if (connected_sockets.length === 0) {
@@ -89,8 +90,19 @@ const getAllSessions = async  function (projectKey, filters, onlineOnly= false) 
         }
 
         // Add session to the list if it passes the filter
-        if (isValidSession(item.handshake.query.sessionInfo, filters.filter)) {
+        const result = isValidSession(item.handshake.query.sessionInfo, filters.filter)
+        if (result.matched) {
             sessions.push(item.handshake.query.sessionInfo);
+            // Add filter name/value to counter
+            for (const [filterName, filterValue] of Object.entries(result.filters)) {
+                if (counters[filterName] === undefined) {
+                    counters[filterName] = {};
+                }
+                if (counters[filterName][filterValue] === undefined) {
+                    counters[filterName][filterValue] = 0;
+                }
+                counters[filterName][filterValue] += 1;
+            }
         }
     }
 
@@ -113,10 +125,11 @@ const socketsListByProject = async function (req, res) {
     }
 
     // find all sessions for a project
-    const sessions = await getAllSessions(_projectKey, filters);
+    const counters = {};
+    const sessions = await getAllSessions(_projectKey, filters, counters);
 
     // send response
-    respond(req, res, sortPaginate(sessions, filters));
+    respond(req, res, sortPaginate(sessions, filters, counters));
 }
 
 // Sort by projectKey
@@ -135,10 +148,11 @@ const socketsLiveByProject = async function (req, res) {
     }
 
     // find all sessions for a project
-    const sessions = await getAllSessions(_projectKey, filters, true);
+    const counters = {};
+    const sessions = await getAllSessions(_projectKey, filters, counters, true);
 
     // send response
-    respond(req, res, sortPaginate(sessions, filters));
+    respond(req, res, sortPaginate(sessions, filters, counters));
 }
 
 // Sort by roomID (projectKey+sessionId)

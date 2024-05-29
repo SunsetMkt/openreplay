@@ -2,22 +2,25 @@ package connector
 
 import (
 	"context"
-	"log"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
 	"openreplay/backend/internal/config/connector"
+	"openreplay/backend/pkg/logger"
 )
 
 type ClickHouse struct {
-	cfg  *connector.Config
-	conn driver.Conn
+	log     logger.Logger
+	cfg     *connector.Config
+	conn    driver.Conn
+	batches *Batches
 }
 
-func NewClickHouse(cfg *connector.Config) (*ClickHouse, error) {
+func NewClickHouse(log logger.Logger, cfg *connector.Config, batches *Batches) (*ClickHouse, error) {
 	url := cfg.Clickhouse.URL
 	url = strings.TrimPrefix(url, "tcp://")
 	url = strings.TrimSuffix(url, "/default")
@@ -43,22 +46,30 @@ func NewClickHouse(cfg *connector.Config) (*ClickHouse, error) {
 		return nil, err
 	}
 	c := &ClickHouse{
-		cfg:  cfg,
-		conn: conn,
+		log:     log,
+		cfg:     cfg,
+		conn:    conn,
+		batches: batches,
 	}
 	return c, nil
 }
 
+func (c *ClickHouse) InsertEvents(batch []map[string]string) error {
+	return c.insertEventsUsingBuffer(batch)
+}
+
 const eventsSQL = "INSERT INTO connector_events_buffer (sessionid, consolelog_level, consolelog_value, customevent_name, customevent_payload, jsexception_message, jsexception_name, jsexception_payload, jsexception_metadata, networkrequest_type, networkrequest_method, networkrequest_url, networkrequest_request, networkrequest_response, networkrequest_status, networkrequest_timestamp, networkrequest_duration, issueevent_message_id, issueevent_timestamp, issueevent_type, issueevent_context_string, issueevent_context, issueevent_payload, issueevent_url, customissue_name, customissue_payload, received_at, batch_order_number) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 
-func (c *ClickHouse) InsertEvents(batch []map[string]string) error {
+func (c *ClickHouse) insertEventsUsingBuffer(batch []map[string]string) error {
 	bulk, err := c.conn.PrepareBatch(context.Background(), eventsSQL)
 	if err != nil {
 		return err
 	}
 	for _, event := range batch {
+		ctx := context.Background()
+		ctx = context.WithValue(ctx, "sessionID", c.Uint64(ctx, event["sessionid"]))
 		if err := bulk.Append(
-			Uint64(event["sessionid"]),
+			c.Uint64(ctx, event["sessionid"]),
 			nullableString(event["consolelog_level"]),
 			nullableString(event["consolelog_value"]),
 			nullableString(event["customevent_name"]),
@@ -72,11 +83,11 @@ func (c *ClickHouse) InsertEvents(batch []map[string]string) error {
 			nullableString(event["networkrequest_url"]),
 			nullableString(event["networkrequest_request"]),
 			nullableString(event["networkrequest_response"]),
-			nullableUint64(event["networkrequest_status"]),
-			nullableUint64(event["networkrequest_timestamp"]),
-			nullableUint64(event["networkrequest_duration"]),
+			c.nullableUint64(ctx, event["networkrequest_status"]),
+			c.nullableUint64(ctx, event["networkrequest_timestamp"]),
+			c.nullableUint64(ctx, event["networkrequest_duration"]),
 			nullableString(event["issueevent_message_id"]),
-			nullableUint64(event["issueevent_timestamp"]),
+			c.nullableUint64(ctx, event["issueevent_timestamp"]),
 			nullableString(event["issueevent_type"]),
 			nullableString(event["issueevent_context_string"]),
 			nullableString(event["issueevent_context"]),
@@ -84,59 +95,65 @@ func (c *ClickHouse) InsertEvents(batch []map[string]string) error {
 			nullableString(event["issueevent_url"]),
 			nullableString(event["customissue_name"]),
 			nullableString(event["customissue_payload"]),
-			nullableUint64(event["received_at"]),
-			nullableUint64(event["batch_order_number"]),
+			c.nullableUint64(ctx, event["received_at"]),
+			c.nullableUint64(ctx, event["batch_order_number"]),
 		); err != nil {
-			log.Printf("can't append value set to batch, err: %s", err)
+			c.log.Error(ctx, "can't append value set to batch, err: ", err)
 		}
 	}
 	return bulk.Send()
 }
 
+func (c *ClickHouse) InsertSessions(batch []map[string]string) error {
+	return c.insertSessionsUsingBuffer(batch)
+}
+
 const sessionsSQL = "INSERT INTO connector_user_sessions_buffer (sessionid, user_agent, user_browser, user_browser_version, user_country, user_device, user_device_heap_size, user_device_memory_size, user_device_type, user_os, user_os_version, user_uuid, connection_effective_bandwidth, connection_type, referrer, user_anonymous_id, user_id, session_start_timestamp, session_end_timestamp, session_duration, first_contentful_paint, speed_index, visually_complete, timing_time_to_interactive, avg_cpu, avg_fps, max_cpu, max_fps, max_total_js_heap_size, max_used_js_heap_size, js_exceptions_count, inputs_count, clicks_count, issues_count, pages_count, metadata_1, metadata_2, metadata_3, metadata_4, metadata_5, metadata_6, metadata_7, metadata_8, metadata_9, metadata_10) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 
-func (c *ClickHouse) InsertSessions(batch []map[string]string) error {
+func (c *ClickHouse) insertSessionsUsingBuffer(batch []map[string]string) error {
 	bulk, err := c.conn.PrepareBatch(context.Background(), sessionsSQL)
 	if err != nil {
 		return err
 	}
 	for _, sess := range batch {
+		ctx := context.Background()
+		ctx = context.WithValue(ctx, "sessionID", c.Uint64(ctx, sess["sessionid"]))
 		if err := bulk.Append(
-			Uint64(sess["sessionid"]),
+			c.Uint64(ctx, sess["sessionid"]),
 			nullableString(sess["user_agent"]),
 			nullableString(sess["user_browser"]),
 			nullableString(sess["user_browser_version"]),
 			nullableString(sess["user_country"]),
 			nullableString(sess["user_device"]),
-			nullableUint64(sess["user_device_heap_size"]),
-			nullableUint64(sess["user_device_memory_size"]),
+			c.nullableUint64(ctx, sess["user_device_heap_size"]),
+			c.nullableUint64(ctx, sess["user_device_memory_size"]),
 			nullableString(sess["user_device_type"]),
 			nullableString(sess["user_os"]),
 			nullableString(sess["user_os_version"]),
 			nullableString(sess["user_uuid"]),
-			nullableUint64(sess["connection_effective_bandwidth"]),
+			c.nullableUint64(ctx, sess["connection_effective_bandwidth"]),
 			nullableString(sess["connection_type"]),
 			nullableString(sess["referrer"]),
 			nullableString(sess["user_anonymous_id"]),
 			nullableString(sess["user_id"]),
-			nullableUint64(sess["session_start_timestamp"]),
-			nullableUint64(sess["session_end_timestamp"]),
-			nullableUint64(sess["session_duration"]),
-			nullableUint64(sess["first_contentful_paint"]),
-			nullableUint64(sess["speed_index"]),
-			nullableUint64(sess["visually_complete"]),
-			nullableUint64(sess["timing_time_to_interactive"]),
-			nullableUint64(sess["avg_cpu"]),
-			nullableUint64(sess["avg_fps"]),
-			nullableUint64(sess["max_cpu"]),
-			nullableUint64(sess["max_fps"]),
-			nullableUint64(sess["max_total_js_heap_size"]),
-			nullableUint64(sess["max_used_js_heap_size"]),
-			nullableUint64(sess["js_exceptions_count"]),
-			nullableUint64(sess["inputs_count"]),
-			nullableUint64(sess["clicks_count"]),
-			nullableUint64(sess["issues_count"]),
-			nullableUint64(sess["pages_count"]),
+			c.nullableUint64(ctx, sess["session_start_timestamp"]),
+			c.nullableUint64(ctx, sess["session_end_timestamp"]),
+			c.nullableUint64(ctx, sess["session_duration"]),
+			c.nullableUint64(ctx, sess["first_contentful_paint"]),
+			c.nullableUint64(ctx, sess["speed_index"]),
+			c.nullableUint64(ctx, sess["visually_complete"]),
+			c.nullableUint64(ctx, sess["timing_time_to_interactive"]),
+			c.nullableUint64(ctx, sess["avg_cpu"]),
+			c.nullableUint64(ctx, sess["avg_fps"]),
+			c.nullableUint64(ctx, sess["max_cpu"]),
+			c.nullableUint64(ctx, sess["max_fps"]),
+			c.nullableUint64(ctx, sess["max_total_js_heap_size"]),
+			c.nullableUint64(ctx, sess["max_used_js_heap_size"]),
+			c.nullableUint64(ctx, sess["js_exceptions_count"]),
+			c.nullableUint64(ctx, sess["inputs_count"]),
+			c.nullableUint64(ctx, sess["clicks_count"]),
+			c.nullableUint64(ctx, sess["issues_count"]),
+			c.nullableUint64(ctx, sess["pages_count"]),
 			nullableString(sess["metadata_1"]),
 			nullableString(sess["metadata_2"]),
 			nullableString(sess["metadata_3"]),
@@ -148,7 +165,7 @@ func (c *ClickHouse) InsertSessions(batch []map[string]string) error {
 			nullableString(sess["metadata_9"]),
 			nullableString(sess["metadata_10"]),
 		); err != nil {
-			log.Printf("can't append value set to batch, err: %s", err)
+			c.log.Error(ctx, "can't append value set to batch, err: ", err)
 		}
 	}
 	return bulk.Send()
@@ -158,13 +175,13 @@ func (c *ClickHouse) Close() error {
 	return c.conn.Close()
 }
 
-func Uint64(v string) uint64 {
+func (c *ClickHouse) Uint64(ctx context.Context, v string) uint64 {
 	if v == "" {
 		return 0
 	}
 	res, err := strconv.Atoi(v)
 	if err != nil {
-		log.Printf("can't convert string to uint64, err: %s", err)
+		c.log.Error(ctx, "can't convert string to uint64, err: %s", err)
 		return 0
 	}
 	return uint64(res)
@@ -178,12 +195,12 @@ func nullableString(v string) *string {
 	return p
 }
 
-func nullableUint64(v string) *uint64 {
+func (c *ClickHouse) nullableUint64(ctx context.Context, v string) *uint64 {
 	var p *uint64 = nil
 	if v != "" {
 		res, err := strconv.Atoi(v)
 		if err != nil {
-			log.Printf("can't convert string to uint64, err: %s", err)
+			c.log.Error(ctx, "can't convert string to uint64, err: %s", err)
 			return nil
 		}
 		a := uint64(res)
