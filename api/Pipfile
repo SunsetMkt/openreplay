@@ -14,7 +14,7 @@ fastapi = "==0.104.1"
 python-decouple = "==3.8"
 apscheduler = "==3.10.4"
 redis = "==5.0.1"
-urllib3 = "==1.26.16"
+urllib3 = "==1.26.19"
 uvicorn = {extras = ["standard"], version = "==0.23.2"}
 pydantic = {extras = ["email"], version = "==2.3.0"}
 psycopg = {extras = ["binary", "pool"], version = "==3.1.14"}
