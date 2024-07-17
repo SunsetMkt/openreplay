@@ -14,6 +14,6 @@ clickhouse-driver==0.2.6
 python3-saml==1.15.0
 python-multipart==0.0.6
 python-decouple==3.8
-pydantic==1.10.12
+pydantic==1.10.13
 
 boto3==1.28.29
